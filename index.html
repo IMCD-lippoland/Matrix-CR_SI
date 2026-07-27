@@ -166,6 +166,21 @@
   .btn.xl{background:#1d6f42;border-color:#1d6f42;color:#fff}
   .btn.xl:hover{background:#268952}
   @media print{.tagpicker{display:none!important}}
+
+  /* --- readable reward cell --- */
+  td .rline{margin:0 0 2px;line-height:1.35}
+  td .rline:last-child{margin-bottom:0}
+  td .rgap{height:5px}
+  td .amt{font-size:13.5px;font-weight:700;color:var(--teal-900);letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+  td .rlbl{font-size:9.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+  td.merged{background:#fcfdfc}
+  tbody tr.data-row:hover td.merged{background:#f4f8f6}
+  td[data-col="cluster"] .cell{font-weight:600}
+  @media print{
+    td .amt{font-size:9.5px}
+    td .rlbl{font-size:7.5px}
+    td.merged{background:transparent}
+  }
 </style>
 </head>
 <body>
@@ -180,6 +195,7 @@
     <button class="btn ghost editing-only" id="cr_btnImport">Import</button>
     <input type="file" id="cr_fileInput" accept=".json,application/json" hidden>
     <span class="spacer"></span>
+    <label class="toggle editing-only"><input type="checkbox" id="cr_tglMerge" checked> Merge repeats</label>
     <label class="toggle editing-only"><input type="checkbox" id="cr_tglPreview"> Preview</label>
     <button class="btn xl editing-only" id="cr_btnXlsxOut">To Excel</button>
     <button class="btn xl editing-only" id="cr_btnXlsxIn">From Excel</button>
@@ -306,7 +322,11 @@ normalize();
 
 function normalize(){
   if(!data.tagLibrary) data.tagLibrary = defaultTags();
-  (data.columns||[]).forEach(function(c){ if(!c.type) c.type="text"; });
+  if(data.mergeRepeats===undefined) data.mergeRepeats = true;
+  (data.columns||[]).forEach(function(c){
+    if(!c.type) c.type="text";
+    if(c.rich===undefined) c.rich = (c.id==="reward");
+  });
   (data.sections||[]).forEach(function(s){
     (s.rows||[]).forEach(function(r){
       if(!r.cells) r.cells={};
@@ -336,6 +356,51 @@ function toast(msg){var t=document.getElementById('cr_toast');t.textContent=msg;
 
 /* ---------------- Render ---------------- */
 var printMode = false;
+
+/* Make the money the thing you see first; keep ALL-CAPS wording quiet. */
+function richText(str){
+  var lines = String(str==null?"":str).split("\n");
+  var out = "";
+  lines.forEach(function(ln){
+    if(ln.trim()===""){ out += '<div class="rgap"></div>'; return; }
+    var parts = ln.split(/(Rp\s?[0-9][0-9.,]*)/);
+    var h = "";
+    parts.forEach(function(p){
+      if(!p) return;
+      if(/^Rp\s?[0-9]/.test(p)){ h += '<span class="amt">'+esc(p)+'</span>'; return; }
+      var t = p.trim();
+      var isLabel = t.length>1 && t===t.toUpperCase() && /[A-Z]/.test(t);
+      h += isLabel ? '<span class="rlbl">'+esc(p)+'</span>' : '<span>'+esc(p)+'</span>';
+    });
+    out += '<div class="rline">'+h+'</div>';
+  });
+  return out;
+}
+
+function mergeKey(c,r){
+  var v = r.cells[c.id];
+  if(c.type==='tags') return JSON.stringify({t:(v&&v.text)||"", g:(v&&v.tags)||[]});
+  if(c.type==='link') return "";
+  return (v==null?"":String(v));
+}
+function buildMerge(sec, cols){
+  var map={};
+  cols.forEach(function(c){
+    var arr=new Array(sec.rows.length), i=0;
+    while(i<sec.rows.length){
+      var k=mergeKey(c,sec.rows[i]), j=i+1;
+      if(data.mergeRepeats && c.type!=='link' && k!==""){
+        while(j<sec.rows.length && mergeKey(c,sec.rows[j])===k) j++;
+      }
+      var rids=[]; for(var x=i;x<j;x++) rids.push(sec.rows[x].id);
+      arr[i]={span:j-i, rids:rids};
+      for(var y=i+1;y<j;y++) arr[y]={skip:true};
+      i=j;
+    }
+    map[c.id]=arr;
+  });
+  return map;
+}
 function colHasLink(c){
   return data.sections.some(function(s){
     return s.rows.some(function(r){ var v=r.cells[c.id]; return !!(v && v.url); });
@@ -379,7 +444,8 @@ function render(){
         '<button class="tinybtn" data-act="secdel" data-sid="'+sec.id+'" style="color:var(--danger)">✕</button>'+
       '</span></div></td></tr>';
 
-    sec.rows.forEach(function(r){
+    var mm = buildMerge(sec, cols);
+    sec.rows.forEach(function(r,ri){
       counter++;
       let tds='<td class="tools-col noprint"><div class="rowtools">'+
         '<button title="Move up" data-act="rowup" data-sid="'+sec.id+'" data-rid="'+r.id+'">↑</button>'+
@@ -388,7 +454,11 @@ function render(){
         '<button class="del" title="Delete" data-act="rowdel" data-sid="'+sec.id+'" data-rid="'+r.id+'">✕</button>'+
         '</div></td><td class="no-col">'+counter+'</td>';
       cols.forEach(function(c){
-        tds+='<td data-col="'+c.id+'">'+cellHTML(c,r,sec.id)+'</td>';
+        var m = mm[c.id][ri];
+        if(m && m.skip) return;
+        var span = (m && m.span>1) ? ' rowspan="'+m.span+'"' : '';
+        var cls  = (m && m.span>1) ? ' class="merged"' : '';
+        tds+='<td data-col="'+c.id+'"'+span+cls+'>'+cellHTML(c,r,sec.id,(m&&m.rids)||[r.id])+'</td>';
       });
       body+='<tr class="data-row">'+tds+'</tr>';
     });
@@ -412,8 +482,9 @@ function render(){
     '<div class="doc-foot"><span>LippoLand · Product Marketing</span><span class="conf">Confidential — Internal Use Only</span></div>';
 }
 
-function cellHTML(c,r,sid){
+function cellHTML(c,r,sid,rids){
   const v=r.cells[c.id];
+  const RID=(rids&&rids.length?rids:[r.id]).join(',');
   if(c.type==="tags"){
     const tags=(v&&v.tags)||[];
     let h='<div class="ketwrap"><div class="taglist">';
@@ -422,7 +493,7 @@ function cellHTML(c,r,sid){
          '<button class="x noprint" title="Remove" data-act="tagdel" data-sid="'+sid+'" data-rid="'+r.id+'" data-colid="'+c.id+'" data-tag="'+esc(t)+'">×</button></span>';
     });
     h+='<button class="addtag noprint" data-act="tagpick" data-sid="'+sid+'" data-rid="'+r.id+'" data-colid="'+c.id+'">+ Tag</button>';
-    h+='</div><div class="kettext" contenteditable data-edit="kettext" data-sid="'+sid+'" data-rid="'+r.id+'" data-colid="'+c.id+'">'+esc((v&&v.text)||"")+'</div></div>';
+    h+='</div><div class="kettext" contenteditable data-edit="kettext" data-sid="'+sid+'" data-rid="'+r.id+'" data-rids="'+RID+'" data-colid="'+c.id+'">'+esc((v&&v.text)||"")+'</div></div>';
     return h;
   }
   if(c.type==="link"){
@@ -436,7 +507,10 @@ function cellHTML(c,r,sid){
     }
     return h;
   }
-  return '<div class="cell" contenteditable data-edit="cell" data-sid="'+sid+'" data-rid="'+r.id+'" data-colid="'+c.id+'">'+esc(v||"")+'</div>';
+  if(c.rich){
+    return '<div class="cell rich" contenteditable data-edit="cell" data-sid="'+sid+'" data-rid="'+r.id+'" data-rids="'+RID+'" data-colid="'+c.id+'">'+richText(v||"")+'</div>';
+  }
+  return '<div class="cell" contenteditable data-edit="cell" data-sid="'+sid+'" data-rid="'+r.id+'" data-rids="'+RID+'" data-colid="'+c.id+'">'+esc(v||"")+'</div>';
 }
 
 /* ---------------- Tag picker ---------------- */
@@ -488,6 +562,16 @@ function openPicker(btn,sid,rid,colid){
 }
 
 /* ---------------- Edit sync ---------------- */
+document.getElementById('cr_doc').addEventListener('focusin',function(e){
+  const el=e.target.closest('.cell.rich[contenteditable]'); if(!el) return;
+  const r=findRow(el.dataset.sid,el.dataset.rid);
+  if(r) el.textContent = r.cells[el.dataset.colid] || "";
+});
+function ridsOf(el,fallback){
+  var raw=el.dataset.rids||"";
+  var arr=raw?raw.split(','):[];
+  return arr.length?arr:[fallback];
+}
 document.getElementById('cr_doc').addEventListener('focusout',function(e){
   const el=e.target.closest('[data-edit]'); if(!el) return;
   const kind=el.dataset.edit;
@@ -495,8 +579,17 @@ document.getElementById('cr_doc').addEventListener('focusout',function(e){
   if(kind==='meta'){ data.meta[el.dataset.key]=el.innerText.trim(); }
   else if(kind==='sectitle'){ const s=findSection(el.dataset.sid); if(s)s.title=el.innerText.trim(); }
   else if(kind==='collabel'){ const c=data.columns.find(function(c){return c.id===el.dataset.colid;}); if(c)c.label=el.innerText.trim(); }
-  else if(kind==='cell'){ const r=findRow(el.dataset.sid,el.dataset.rid); if(r) r.cells[el.dataset.colid]=txt; }
-  else if(kind==='kettext'){ const r=findRow(el.dataset.sid,el.dataset.rid); if(r) r.cells[el.dataset.colid].text=txt; }
+  else if(kind==='cell'){
+    ridsOf(el,el.dataset.rid).forEach(function(id){
+      var rr=findRow(el.dataset.sid,id); if(rr) rr.cells[el.dataset.colid]=txt;
+    });
+    if(el.classList.contains('rich')) el.innerHTML = richText(txt);
+  }
+  else if(kind==='kettext'){
+    ridsOf(el,el.dataset.rid).forEach(function(id){
+      var rr=findRow(el.dataset.sid,id); if(rr) rr.cells[el.dataset.colid].text=txt;
+    });
+  }
   autosave();
 });
 
@@ -577,6 +670,9 @@ document.getElementById('cr_fileInput').addEventListener('change',function(e){
   rd.onload=function(){ try{ const d=JSON.parse(rd.result); if(!d.columns||!d.sections) throw 0; data=d; normalize(); rerender(); toast("Backup loaded"); }catch(err){ toast("That file isn't a valid matrix backup"); } };
   rd.readAsText(f); e.target.value="";
 });
+var __tm=document.getElementById('cr_tglMerge');
+if(__tm){ __tm.checked = data.mergeRepeats!==false;
+  __tm.addEventListener('change',function(e){ data.mergeRepeats=e.target.checked; rerender(); }); }
 document.getElementById('cr_tglPreview').addEventListener('change',function(e){
   document.getElementById('page-cr').classList.toggle('preview',e.target.checked);
   document.getElementById('page-cr').classList.toggle('editing',!e.target.checked);
