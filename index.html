@@ -508,12 +508,15 @@ function mergeKey(c,r){
 }
 function buildMerge(sec, cols){
   var map={};
+  var gids = groupIdsFor(sec); // real Type+Reward group boundaries — other columns
+                                // (periode, ket...) must never merge across these,
+                                // even if their own text happens to match on both sides.
   cols.forEach(function(c){
     var arr=new Array(sec.rows.length), i=0;
     while(i<sec.rows.length){
       var k=mergeKey(c,sec.rows[i]), j=i+1;
       if(data.mergeRepeats && c.type!=='link' && k!==""){
-        while(j<sec.rows.length && mergeKey(c,sec.rows[j])===k) j++;
+        while(j<sec.rows.length && mergeKey(c,sec.rows[j])===k && gids[j-1]===gids[j]) j++;
       }
       var rids=[]; for(var x=i;x<j;x++) rids.push(sec.rows[x].id);
       arr[i]={span:j-i, rids:rids};
@@ -523,6 +526,16 @@ function buildMerge(sec, cols){
     map[c.id]=arr;
   });
   return map;
+}
+function groupIdsFor(sec){
+  var gs = buildGroupSpans(sec);
+  var ids = new Array(sec.rows.length).fill(null);
+  for(var i=0;i<sec.rows.length;i++){
+    if(gs[i] && !gs[i].skip && gs[i].span>1){
+      for(var k=i;k<i+gs[i].span;k++) ids[k]=i;
+    }
+  }
+  return ids;
 }
 
 /* No. column merges too, but only where BOTH Type Unit (produk) and
@@ -638,8 +651,8 @@ function render(){
         '<button class="del" title="Delete" data-act="rowdel" data-sid="'+sec.id+'" data-rid="'+r.id+'">✕</button>'+
         '</div></td>';
 
-      var nspan = isGroup ? ' rowspan="'+groupSpan+'"' : '';
-      tds += '<td class="no-col"'+nspan+'>'+counter+'</td>';
+      var nspan = ''; // a collapsed group is ONE physical <tr> — rowspan would
+      tds += '<td class="no-col"'+nspan+'>'+counter+'</td>'; // reach into unrelated rows below it
 
       cols.forEach(function(c){
         if(c.id==='cluster' && isGroup){
@@ -658,7 +671,13 @@ function render(){
           });
           inner += '<button class="cl-add noprint" title="Add another cluster to this group" data-act="clusteradd" data-sid="'+sec.id+'" data-anchor="'+r.id+'">+ Tambah</button>';
           inner += '</div>';
-          tds += '<td data-col="cluster" class="merged" rowspan="'+groupSpan+'">'+inner+'</td>';
+          tds += '<td data-col="cluster" class="merged">'+inner+'</td>'; // no rowspan — see note above
+          return;
+        }
+        if(isGroup){
+          // Whole group already lives in this one <tr> — never span into the
+          // next (unrelated) group's row. Show this column's shared value plainly.
+          tds += '<td data-col="'+c.id+'" class="merged">'+cellHTML(c,r,sec.id,[r.id])+'</td>';
           return;
         }
         var m = mm[c.id][ri];
