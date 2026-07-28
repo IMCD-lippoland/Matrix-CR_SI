@@ -588,13 +588,27 @@ function visibleCols(){
     return true;
   });
 }
+/* Printing at "Fit to page width" scales the WHOLE page, but Chrome has known
+   quirks combining that with table-layout:fixed + explicit px column widths —
+   the ratios can come out wrong. So for print specifically we pre-shrink the
+   column widths ourselves (proportionally, never changing your saved screen
+   widths) so the table already fits one landscape A4 page at 100% scale —
+   no reliance on the browser's auto-fit behaviour at all. */
+var PRINT_SAFE_WIDTH = 1000; // landscape A4 usable width at 96dpi, with margin
+function printScaledWidths(cols){
+  var fixed = 34 + 40; // tools-col + no-col, not user-adjustable
+  var total = fixed + cols.reduce(function(a,c){ return a + (c.width||160); }, 0);
+  var scale = total > PRINT_SAFE_WIDTH ? (PRINT_SAFE_WIDTH - fixed) / (total - fixed) : 1;
+  return cols.map(function(c){ return Math.max(40, Math.round((c.width||160) * scale)); });
+}
 function render(){
   const doc=document.getElementById('cr_doc');
   const cols=visibleCols();
   const totalCols=cols.length+2;
 
   let colgroup='<colgroup><col style="width:34px"><col style="width:40px">';
-  cols.forEach(function(c){colgroup+='<col style="width:'+(c.width||160)+'px">';});
+  var printWidths = printMode ? printScaledWidths(cols) : null;
+  cols.forEach(function(c,ci){colgroup+='<col style="width:'+(printMode?printWidths[ci]:(c.width||160))+'px">';});
   colgroup+='</colgroup>';
 
   let thead='<thead><tr><th class="tools-col noprint"></th><th class="no-col">No</th>';
